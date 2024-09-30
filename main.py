@@ -1,7 +1,7 @@
 from fasthtml.common import *
 from fh_bootstrap import *
 import pandas as pd
-import io
+from io import BytesIO
 
 
 def is_answer(answers, column_name):
@@ -10,21 +10,25 @@ def is_answer(answers, column_name):
 
 
 def render(quizs):
-    answers = quizs.answers.lower()
-    edit_link = A("Edit", hx_get=f"/edit/{quizs.id}", target_id="main")
+    qid = f"q-{quizs.id}"
+    answers = quizs.answers  # .lower()
+    edit_link = A("✏️", hx_get=f"/edit/{quizs.id}", target_id="main")
+    delete_link = A("❌", hx_delete=f"/{quizs.id}", target_id=qid, hx_swap="outerHTML")
     return Tr(
         Td(quizs.tag),
         Td(quizs.question),
-        Td(Strong(quizs.a) if is_answer(answers, "a") else quizs.a),
-        Td(Strong(quizs.b) if is_answer(answers, "b") else quizs.b),
-        Td(Strong(quizs.c) if is_answer(answers, "c") else quizs.c),
-        Td(Strong(quizs.d) if is_answer(answers, "d") else quizs.d),
+        Td(Strong(quizs.a) if is_answer(answers, "A") else quizs.a),
+        Td(Strong(quizs.b) if is_answer(answers, "B") else quizs.b),
+        Td(Strong(quizs.c) if is_answer(answers, "C") else quizs.c),
+        Td(Strong(quizs.d) if is_answer(answers, "D") else quizs.d),
         Td(quizs.answers),
-        Td(edit_link),
+        Td(edit_link, " | ", delete_link),
+        id=qid,
     )
 
 
-column_names = ["Tag", "Question", "A", "B", "C", "D", "Answers", "Edit"]
+column_names = ["Tag", "Question", "A", "B", "C", "D", "Answers", "Manage"]
+
 
 app, rt, quizs, Quiz = fast_app(
     "data/quiz.db",
@@ -42,6 +46,7 @@ app, rt, quizs, Quiz = fast_app(
 )
 
 
+# standardize the column names
 def clean_column_name(column_name):
     # Strip leading and trailing whitespace
     cleaned = column_name.strip()
@@ -52,12 +57,14 @@ def clean_column_name(column_name):
     return cleaned
 
 
+# Convert the binary to a pandas dataframe
 def convert_binary_to_df(file_content):
-    data = io.BytesIO(file_content)  # convert the binary to excel data
+    data = BytesIO(file_content)  # convert the binary to excel data
     df = pd.read_excel(data, dtype=object)
     # Standardize the column names
     df.columns = [clean_column_name(col) for col in df.columns]
-    df.answers = df.answers.str.lower().fillna("a")
+    # df.answers = df.answers.str.lower().fillna("a")
+    df.answers = df.answers.fillna("A")
     # Convert the na values to empty strings to store in DB.
     df = df.fillna("")
     # print(df)
@@ -67,10 +74,10 @@ def convert_binary_to_df(file_content):
 def insert_data(df):
     lst = df.to_dict(orient="records")
     for row in lst:
-        # print(Quiz(row))
         quizs.insert(Quiz(**row))
 
 
+# Mainpage
 @rt("/")
 def get():
     grp = Group(Input(type="file", name="file", required="true"), Button("Upload"))
@@ -87,9 +94,12 @@ def get():
 
 def display_table():
     table = Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped")
-    return Titled("Questions", table, id="main")
+    upload_btn = Button("Upload", hx_get="/", target_id="main")
+    download_btn =  A(Button("Export"), href="/download") if quizs() else ""
+    return Titled("Questions", table, id="main"), upload_btn, " ", download_btn
 
 
+# To upload the Excel file
 @rt("/upload")
 async def post(file: UploadFile):
     if not file.filename.endswith("xlsx"):
@@ -100,29 +110,94 @@ async def post(file: UploadFile):
     return display_table()
 
 
+# To display all the questions
 @rt("/questions")
 def get():
-    return display_table()
+    return display_table() 
 
 
+# Delete a question from the database
+@rt("/{id}")
+def delete(id: int):
+    quizs.delete(id)
+
+
+# Edit Page for each question
 @rt("/edit/{id}")
 def get(id: int):
     quiz = quizs.get(id)
     hdr = Div(
         Label("Question"),
-        Input(type="text", id="question", value=quiz.question),
+        Textarea(quiz.question, type="text", id="question" ),
+        Hidden(id="id", value=quiz.id),
     )
+    body = [
+        Group(
+            CheckboxX(is_answer(quiz.answers, "A"), id="A"), Input(id="a", value=quiz.a)
+        ),
+        Group(
+            CheckboxX(is_answer(quiz.answers, "B"), id="B"), Input(id="b", value=quiz.b)
+        ),
+        Group(
+            CheckboxX(is_answer(quiz.answers, "C"), id="C"), Input(id="c", value=quiz.c)
+        ),
+        Group(
+            CheckboxX(is_answer(quiz.answers, "D"), id="D"), Input(id="d", value=quiz.d)
+        ),
+    ]
     ftr = Div(
-        Button("Update", hx_post=f"/update/{id}", target_id="edit-form"),
+        Button("Update", hx_post=f"/update", target_id="main"),
         " ",
         Button("Cancel", hx_get=f"/questions", target_id="main"),
     )
     return Titled(
         "Edit",
         Form(
-            Card( header=hdr, footer=ftr, id="edit-form"),
-            # hx_post=f"/update/{id}",
+            Card(*body, header=hdr, footer=ftr, id="edit-form"),
+            hx_post=f"/update/{id}",
         ),
+    )
+
+
+@dataclass
+class Options:
+    A: bool
+    B: bool
+    C: bool
+    D: bool
+
+
+@rt("/update")
+def post(option: Options, quiz: Quiz):
+    answers = "".join(letter for letter, value in option.__dict__.items() if value)
+    if answers:
+        quiz.answers = answers
+    else:
+        quiz.answers = "A"
+    quizs.update(quiz)
+    return display_table()
+
+
+# Handeling the Excel Export.
+@app.get("/download")
+async def download_excel():
+    # Create DataFrame and remove 'id' column
+    try:
+        df = pd.DataFrame(quizs()).drop("id", axis=1)
+    except KeyError:
+        return RedirectResponse("/")
+    # Create Excel file in memory
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        df.to_excel(writer, index=False)
+
+    # Prepare download headers
+    headers = {"Content-Disposition": 'attachment; filename="quiz_data.xlsx"'}
+    # Return Excel file as downloadable response
+    return Response(
+        output.getvalue(),
+        headers=headers,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 
