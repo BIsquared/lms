@@ -1,15 +1,22 @@
 from fasthtml.common import *
+from fh_bootstrap import *
 import pandas as pd
 import io
 
+def answer_highlight(answers, column_name, value):
+    # Check if the column name contains "answer"
+    return Strong(value) if column_name in answers else value
+
 def render(quizs):
+    answers = quizs.answers.lower()
+
     return Tr(
             Td(quizs.tag),
             Td(quizs.question),
-            Td(quizs.a),
-            Td(quizs.b),
-            Td(quizs.c),
-            Td(quizs.d),
+            Td(answer_highlight(answers, "a", quizs.a)),
+            Td(answer_highlight(answers, "b", quizs.b)),
+            Td(answer_highlight(answers, "c", quizs.c)),
+            Td(answer_highlight(answers, "d", quizs.d)),
             Td(quizs.answers),
         )
 
@@ -48,15 +55,15 @@ def insert_data(df):
 
 @rt("/")
 def get():
+    grp = Group(Input(type="file", name="file", required="true"), Button("Upload"))
     frm = Form(
-        Input(type="file", name="file", required="true"),
-        Button("Upload"),
+        grp,
         id="upload-form",
         hx_post="/upload",
         target_id="response",
         enctype="multipart/form-data", # multipart/form-data is required for file upload
     )
-    return Titled("Quiz", frm, Div( id="response"))
+    return Titled("Upload File", frm, id="response")
 
 
 @rt("/upload")
@@ -66,7 +73,8 @@ async def post(file: UploadFile):
     file_content = await file.read()
     df = convert_binary_to_df(file_content)
     insert_data(df)
-    return Table(Thead(Tr(map(Th, column_names))),Tbody(*quizs()), cls="striped") 
+    table = Table(Thead(Tr(map(Th, column_names))),Tbody(*quizs()), cls="striped")
+    return Titled("Questions", table)
 
 
 serve()
