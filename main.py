@@ -12,7 +12,7 @@ def is_answer(answers, column_name):
 def render(quizs):
     qid = f"q-{quizs.id}"
     answers = quizs.answers
-    edit_link = A("✏️", hx_get=f"/edit/{quizs.id}", target_id="main")
+    edit_link = A("✏️", hx_get=f"/edit/{quizs.id}", hx_replace_url="true", target_id="main")
     delete_link = A("❌", hx_delete=f"/{quizs.id}", target_id=qid, hx_swap="outerHTML")
     return Tr(
         Td(quizs.tag),
@@ -46,7 +46,10 @@ app, rt, quizs, Quiz = fast_app(
 )
 
 
-question_redirect = RedirectResponse("/questions", status_code=303) # To redirect to the questions page even if the method is not GET
+question_redirect = RedirectResponse(
+    "/questions", status_code=303
+)  # To redirect to the questions page even if the method is not GET
+
 
 # Standardize the column names
 def clean_column_name(column_name):
@@ -70,6 +73,7 @@ def convert_binary_to_df(file_content):
     df = df.fillna("")
     return df
 
+
 # Uploading the data to the database
 def insert_data(df):
     lst = df.to_dict(orient="records")
@@ -88,8 +92,9 @@ def get():
         target_id="main",
         enctype="multipart/form-data",  # multipart/form-data is required for file upload
     )
-    all_ques_btn = Button("All Questions", hx_get="/questions", target_id="main")
-    return Titled("Upload File", frm, all_ques_btn, id="main")
+    all_ques_btn = Button("All Questions", hx_get="/questions", hx_replace_url="true", target_id="main") 
+    return Container(frm, all_ques_btn, id="main")
+
 
 # To upload the Excel file
 @rt("/upload")
@@ -101,14 +106,15 @@ async def post(file: UploadFile):
     insert_data(df)
     return question_redirect
 
+
 # Display all the questions as a table
 @rt("/questions")
 def get():
     table = Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped")
-    upload_btn = Button("Upload", hx_get="/", target_id="main")
-    download_btn = A(Button("Export"), href="/download") if quizs() else ""
+    upload_btn = Button("Upload", hx_get="/", hx_replace_url="true", target_id="main")
+    download_btn = A(Button("Export"), href="/download")
     ctn = (table, upload_btn, " ", download_btn)
-    return Titled("Questions", *ctn, id="main")
+    return Container(*ctn, id="main")
 
 
 # Delete a question from the database
@@ -122,8 +128,8 @@ def delete(id: int):
 def get(id: int):
     quiz = quizs.get(id)
     hdr = Div(
-        Label("Question"),
-        Textarea(quiz.question, type="text", id="question"),
+        Label("Tag", Input(type="text", id="tag", value=quiz.tag)),
+        Label("Question", Textarea(quiz.question, type="text", id="question")),
         Hidden(id="id", value=quiz.id),
     )
     body = [
@@ -141,17 +147,18 @@ def get(id: int):
         ),
     ]
     ftr = Div(
-        Button("Update", hx_post=f"/update", target_id="main"),
+        Button("Update", hx_post=f"/update", hx_replace_url="true", target_id="main"),
         " ",
-        Button("Cancel", hx_get=f"/questions", target_id="main"),
+        Button("Cancel", hx_get=f"/questions", hx_replace_url="true", target_id="main"),
     )
-    return Titled(
-        "Edit",
+    return Container(
         Form(
             Card(*body, header=hdr, footer=ftr, id="edit-form"),
             hx_post=f"/update/{id}",
         ),
+        id="main",
     )
+
 
 # class to handle the checkboxes
 @dataclass
@@ -161,10 +168,13 @@ class Options:
     C: bool
     D: bool
 
+
 # Update the question
 @rt("/update")
 def post(option: Options, quiz: Quiz):
-    answers = "".join(letter for letter, value in option.__dict__.items() if value) # concating the correct options
+    answers = "".join(
+        letter for letter, value in option.__dict__.items() if value
+    )  # concating the correct options
     if answers:
         quiz.answers = answers
     else:
