@@ -1,5 +1,5 @@
 from fasthtml.common import *
-from fh_bootstrap import *
+import openpyxl
 import pandas as pd
 from io import BytesIO
 
@@ -77,8 +77,7 @@ def convert_binary_to_df(file_content):
 # Uploading the data to the database
 def insert_data(df):
     lst = df.to_dict(orient="records")
-    for row in lst:
-        quizs.insert(Quiz(**row))
+    quizs.insert_all(lst, truncate=True)
 
 
 # Main page
@@ -90,6 +89,7 @@ def get():
         id="upload-form",
         hx_post="/upload",
         target_id="main",
+        hx_replace_url="true",
         enctype="multipart/form-data",  # multipart/form-data is required for file upload
     )
     all_ques_btn = Button("All Questions", hx_get="/questions", hx_replace_url="true", target_id="main") 
@@ -110,12 +110,11 @@ async def post(file: UploadFile):
 # Display all the questions as a table
 @rt("/questions")
 def get():
-    table = Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped")
+    table = Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped") if quizs() else P("No data")
     upload_btn = Button("Upload", hx_get="/", hx_replace_url="true", target_id="main")
     download_btn = A(Button("Export"), href="/download")
     ctn = (table, upload_btn, " ", download_btn)
     return Container(*ctn, id="main")
-
 
 # Delete a question from the database
 @rt("/{id}")
@@ -189,11 +188,12 @@ async def download_excel():
     # Create DataFrame and remove 'id' column
     try:
         df = pd.DataFrame(quizs()).drop("id", axis=1)
+        df.columns = column_names[:-1]
     except KeyError:
         return RedirectResponse("/")
     # Create Excel file in memory
     output = BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+    with pd.ExcelWriter(output) as writer:
         df.to_excel(writer, index=False)
 
     # Prepare download headers
