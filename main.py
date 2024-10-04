@@ -1,5 +1,5 @@
 from fasthtml.common import *
-import openpyxl
+import openpyxl  # Additional Plugin for pandas to read Excel
 import pandas as pd
 from io import BytesIO
 
@@ -8,26 +8,31 @@ from io import BytesIO
 def is_answer(answers, column_name):
     return True if column_name in answers else False
 
+green_border = 'border: 1px solid #72BF78; padding: 10px;'
 
 def render(quizs):
-    qid = f"q-{quizs.id}"
+    quiz_id = f"q-{quizs.id}"
     answers = quizs.answers
-    edit_link = A("✏️", hx_get=f"/edit/{quizs.id}", hx_replace_url="true", target_id="main")
-    delete_link = A("❌", hx_delete=f"/{quizs.id}", target_id=qid, hx_swap="outerHTML")
+    edit_link = A(
+        "✏️", hx_get=f"/edit/{quizs.id}", hx_replace_url="true", target_id="main"
+    )
+    delete_link = A("❌", hx_delete=f"/{quizs.id}", target_id=quiz_id, hx_swap="outerHTML")
     return Tr(
-        Td(quizs.tag),
-        Td(quizs.question),
-        Td(Strong(quizs.a) if is_answer(answers, "A") else quizs.a),
-        Td(Strong(quizs.b) if is_answer(answers, "B") else quizs.b),
-        Td(Strong(quizs.c) if is_answer(answers, "C") else quizs.c),
-        Td(Strong(quizs.d) if is_answer(answers, "D") else quizs.d),
-        Td(quizs.answers),
         Td(edit_link, " | ", delete_link),
-        id=qid,
+        Td(quizs.question),
+        Td(P(quizs.a, style=f'{green_border if is_answer(answers, "A") else ""}')),
+        Td(P(quizs.b, style=f'{green_border if is_answer(answers, "B") else ""}')),
+        Td(P(quizs.c, style=f'{green_border if is_answer(answers, "C") else ""}')),
+        Td(P(quizs.d, style=f'{green_border if is_answer(answers, "D") else ""}')),
+        Td(quizs.answers),
+        Td(quizs.tag),
+        id=quiz_id,
     )
 
 
-column_names = ["Tag", "Question", "A", "B", "C", "D", "Answers", "Manage"]
+column_names = ["Manage", "Question", "A", "B", "C", "D", "Answers", "Tag"]
+
+custom_style =Style("""td > p{margin:0px;}""")
 
 
 app, rt, quizs, Quiz = fast_app(
@@ -43,6 +48,7 @@ app, rt, quizs, Quiz = fast_app(
     d=str,
     answers=str,
     pk="id",
+    hdrs=[custom_style]
 )
 
 
@@ -76,24 +82,25 @@ def convert_binary_to_df(file_content):
 
 # Uploading the data to the database
 def insert_data(df):
-    lst = df.to_dict(orient="records")
-    quizs.insert_all(lst, truncate=True)
+    data = df.to_dict(orient="records")
+    quizs.insert_all(data, truncate=True)
 
 
 # Main page
 @rt("/")
 def get():
-    grp = Group(Input(type="file", name="file", required="true"), Button("Upload"))
-    frm = Form(
-        grp,
+    group = Group(Input(type="file", name="file", required="true"), Button("Upload"))
+    form = Form(
+        group,
         id="upload-form",
         hx_post="/upload",
         target_id="main",
-        hx_replace_url="true",
         enctype="multipart/form-data",  # multipart/form-data is required for file upload
     )
-    all_ques_btn = Button("All Questions", hx_get="/questions", hx_replace_url="true", target_id="main") 
-    return Container(frm, all_ques_btn, id="main")
+    all_ques_btn = Button(
+        "All Questions", hx_get="/questions", hx_replace_url="true", target_id="main"
+    )
+    return Container(form, all_ques_btn, id="main")
 
 
 # To upload the Excel file
@@ -110,11 +117,16 @@ async def post(file: UploadFile):
 # Display all the questions as a table
 @rt("/questions")
 def get():
-    table = Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped") if quizs() else P("No data")
+    table = (
+        Table(Thead(Tr(map(Th, column_names))), Tbody(*quizs()), cls="striped", style='border-collapse: separate;')
+        if quizs()
+        else P("No data")
+    )
     upload_btn = Button("Upload", hx_get="/", hx_replace_url="true", target_id="main")
     download_btn = A(Button("Export"), href="/download")
-    ctn = (table, upload_btn, " ", download_btn)
-    return Container(*ctn, id="main")
+    content = (table, upload_btn, " ", download_btn)
+    return Container(*content, id="main")
+
 
 # Delete a question from the database
 @rt("/{id}")
@@ -126,7 +138,7 @@ def delete(id: int):
 @rt("/edit/{id}")
 def get(id: int):
     quiz = quizs.get(id)
-    hdr = Div(
+    header = Div(
         Label("Tag", Input(type="text", id="tag", value=quiz.tag)),
         Label("Question", Textarea(quiz.question, type="text", id="question")),
         Hidden(id="id", value=quiz.id),
@@ -145,14 +157,14 @@ def get(id: int):
             CheckboxX(is_answer(quiz.answers, "D"), id="D"), Input(id="d", value=quiz.d)
         ),
     ]
-    ftr = Div(
+    footer = Div(
         Button("Update", hx_post=f"/update", hx_replace_url="true", target_id="main"),
         " ",
         Button("Cancel", hx_get=f"/questions", hx_replace_url="true", target_id="main"),
     )
     return Container(
         Form(
-            Card(*body, header=hdr, footer=ftr, id="edit-form"),
+            Card(*body, header=header, footer=footer, id="edit-form"),
             hx_post=f"/update/{id}",
         ),
         id="main",
@@ -188,7 +200,7 @@ async def download_excel():
     # Create DataFrame and remove 'id' column
     try:
         df = pd.DataFrame(quizs()).drop("id", axis=1)
-        df.columns = column_names[:-1]
+        df.columns = df.columns.str.capitalize()
     except KeyError:
         return RedirectResponse("/")
     # Create Excel file in memory
