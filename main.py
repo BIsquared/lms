@@ -95,6 +95,7 @@ def get():
         id="upload-form",
         hx_post="/upload",
         target_id="main",
+        hx_replace_url="/questions",
         enctype="multipart/form-data",  # multipart/form-data is required for file upload
     )
     all_ques_btn = Button(
@@ -112,6 +113,7 @@ async def post(file: UploadFile):
     df = convert_binary_to_df(file_content)
     insert_data(df)
     return question_redirect
+
 
 
 # Display all the questions as a table
@@ -158,9 +160,9 @@ def get(id: int):
         ),
     ]
     footer = Div(
-        Button("Update", hx_post=f"/update", hx_replace_url="true", target_id="main"),
+        Button("Update", hx_post=f"/update#q-{id}", hx_replace_url="true", target_id="main"),
         " ",
-        Button("Cancel", hx_get=f"/questions", hx_replace_url="true", target_id="main"),
+        Button("Cancel", hx_get=f"/questions#q-{id}", hx_replace_url="true", target_id="main"),
     )
     return Container(
         Form(
@@ -205,8 +207,19 @@ async def download_excel():
         return RedirectResponse("/")
     # Create Excel file in memory
     output = BytesIO()
-    with pd.ExcelWriter(output) as writer:
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False)
+        # Get the workbook and the worksheet
+        workbook = writer.book
+        worksheet = writer.sheets['Sheet1']
+        
+        # Create a table
+        worksheet.add_table(f'A1:{chr(65 + len(df.columns) - 1)}{len(df) + 1}',
+                            {'name': 'Quiz_table', 'columns': [{'header': col} for col in df.columns]})
+
+        # Apply text wrapping to the entire table
+        wrap_format = workbook.add_format({'text_wrap': True})
+        worksheet.set_column(0, len(df.columns) - 1, 32, wrap_format)
 
     # Prepare download headers
     headers = {"Content-Disposition": 'attachment; filename="quiz_data.xlsx"'}
@@ -216,6 +229,7 @@ async def download_excel():
         headers=headers,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
+
 
 
 serve()
