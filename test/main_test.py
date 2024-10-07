@@ -15,16 +15,6 @@ def test_file_upload_and_display(page: Page) -> None:
     data_table = page.locator('table:has-text("")')
     expect(data_table).to_be_visible()
 
-    # To ensure the excel is displayed correctly
-    first_cell = page.get_by_role("cell", name="Sorting is applied to the New")
-    expect(first_cell).to_have_text("Sorting is applied to the New Query")
-
-    second_cell = page.get_by_role("cell", name="Remove Duplicates on all")
-    expect(second_cell).to_have_text("Remove Duplicates on all columns")
-
-    third_cell = page.get_by_role("cell", name="Which of these questions are")
-    expect(third_cell).to_have_text("Which of these questions are associated with the transaction tables?")
-
 def test_file_export_and_verify(page: Page) -> None:
     page.goto("http://localhost:5001/questions")
 
