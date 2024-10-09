@@ -1,6 +1,8 @@
 from fasthtml.common import *
 import pandas as pd
 from io import BytesIO
+import tempfile
+import xlwings as xw
 
 
 def render(quizzes):
@@ -116,7 +118,39 @@ def get():
         Tbody(*quizzes()),
         cls="striped",
     )
-    return Container(table)
+    export_button = A(Button("Export"), href="/download")
+    return Container(table, export_button)
+
+
+@route("/download")
+def get():
+    df = pd.DataFrame(quizzes()).drop("id", axis=1).rename(columns=str.capitalize)
+    # Create a temporary directory to store the Excel file becasue xlwings doesn't support direct streaming
+    temp_dir = tempfile.mkdtemp()
+    temp_file_path = os.path.join(temp_dir, "quiz_data.xlsx")
+    try:
+        with xw.Book() as workbook:
+            sheet = workbook.sheets.active
+            starting_cell = sheet.range("A1")
+            starting_cell.options(index=False).value = df
+            table_range = starting_cell.expand("table")
+            table = sheet.tables.add(table_range, name="Quiz_table")
+            table.range.column_width = 35
+            table.range.api.WrapText = True
+
+            workbook.save(temp_file_path)
+        # For streaming we need to read the file content into a BytesIO object
+        with open(temp_file_path, "rb") as file_content:
+            output = BytesIO(file_content.read())
+    finally:
+        os.remove(temp_file_path)
+        os.rmdir(temp_dir)
+
+    headers = {
+        "Content-Disposition": "attachment; filename=quiz_data.xlsx",
+        "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # This is to tell the browser that this is an excel file
+    }
+    return StreamingResponse(output, headers=headers)
 
 
 serve()
