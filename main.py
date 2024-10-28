@@ -5,9 +5,20 @@ from io import BytesIO
 import tempfile
 import xlwings as xw
 
+selected_questions_id = []
 
-def render(quizzes):
+
+def render_row(quizzes):
     return Tr(
+        Td(
+            Form(
+                A(
+                    "✅" if quizzes.id in selected_questions_id else "⬜",
+                    hx_post="/select_question",
+                ),
+                Hidden(id="question_id", value=quizzes.id),
+            )
+        ),
         Td(quizzes.question),
         Td(quizzes.a),
         Td(quizzes.b),
@@ -24,6 +35,11 @@ custom_css = Style(
     position: sticky;
     top: 0;
       }
+    .freeze-btn{
+    position: sticky;
+    bottom: 10px;
+    margin-left: 10px;
+    }
     """
 )
 
@@ -31,7 +47,6 @@ custom_css = Style(
 app, route, quizzes, Quiz = fast_app(
     "data/quiz.db",
     live=True,
-    render=render,
     id=int,
     question=str,
     a=str,
@@ -44,7 +59,7 @@ app, route, quizzes, Quiz = fast_app(
     hdrs=[custom_css],
 )
 
-column_names = ["Question", "A", "B", "C", "D", "Answer", "Tag"]
+column_names = ["Select", "Question", "A", "B", "C", "D", "Answer", "Tag"]
 
 
 @route("/")
@@ -116,11 +131,53 @@ async def post(file: UploadFile):
 def get():
     table = Table(
         Thead(Tr(map(Th, column_names)), cls="freeze-header"),
-        Tbody(*quizzes()),
+        Tbody(map(render_row, quizzes())),
         cls="striped",
     )
     export_button = A(Button("Export"), href="/download")
-    return Container(table, export_button)
+    preview_button = A(Button("Preview"), href="/preview_questions")
+    buttons = Div(export_button, " ", preview_button, cls="freeze-btn")
+    return Container(table), buttons
+
+
+def render_question(quizzes):
+    return Li(quizzes["question"])
+
+
+@route("/preview_questions")
+def get():
+    quiz_name_input = Input(Placeholder="Enter Quiz Name", required=True)
+    form = Form(Group(quiz_name_input, Button("Submit")))
+    if not selected_questions_id:
+        # vars is used to convert object to dict
+        # because the else block returns list of dicts hence we standardized
+        selected_quiz_questions = map(vars, quizzes())
+    else:
+        # Created a query to get all the selected questions like, 'id IN (1, 2)'
+        query = "id IN ({}) ".format(", ".join(map(str, selected_questions_id)))
+        selected_quiz_questions = quizzes.rows_where(where=query)
+    preview_questions = Div(
+        H3("Selected Questions"),
+        Ol(
+            map(
+                render_question,
+                selected_quiz_questions,
+            )
+        ),
+    )
+    back_to_select = A(Button("Back to select"), href="/questions")
+    card = Card(preview_questions, header=form, footer=back_to_select)
+    return Container(card)
+
+
+@route("/select_question")
+def post(question_id: int):
+    if question_id in selected_questions_id:
+        selected_questions_id.remove(question_id)
+        return "⬜"
+    else:
+        selected_questions_id.append(question_id)
+        return "✅"
 
 
 @route("/download")
