@@ -187,7 +187,8 @@ def get():
     temp_dir = tempfile.mkdtemp()
     temp_file_path = os.path.join(temp_dir, "quiz_data.xlsx")
     try:
-        with xw.Book() as workbook:
+        with xw.App(visible=False) as app:
+            workbook = app.books.add()
             sheet = workbook.sheets.active
             starting_cell = sheet.range("A1")
             starting_cell.options(index=False).value = df
