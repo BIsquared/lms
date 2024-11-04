@@ -8,24 +8,24 @@ import xlwings as xw
 selected_questions_id = []
 
 
-def render_row(quizzes):
+def render_row(questions):
     return Tr(
         Td(
             Form(
                 A(
-                    "✅" if quizzes.id in selected_questions_id else "⬜",
+                    "✅" if questions.id in selected_questions_id else "⬜",
                     hx_post="/select_question",
                 ),
-                Hidden(id="question_id", value=quizzes.id),
+                Hidden(id="question_id", value=questions.id),
             )
         ),
-        Td(quizzes.question),
-        Td(quizzes.a),
-        Td(quizzes.b),
-        Td(quizzes.c),
-        Td(quizzes.d),
-        Td(quizzes.answers),
-        Td(quizzes.tag),
+        Td(questions.question),
+        Td(questions.a),
+        Td(questions.b),
+        Td(questions.c),
+        Td(questions.d),
+        Td(questions.answers),
+        Td(questions.tag),
     )
 
 
@@ -43,21 +43,43 @@ custom_css = Style(
     """
 )
 
+tables_schema = {
+    "questions": {  # This question table has the all uploaded question with answers
+        "id": int,
+        "question": str,
+        "a": str,
+        "b": str,
+        "c": str,
+        "d": str,
+        "answers": str,
+        "tag": str,
+        "pk": "id",
+    },
+    "quizzes": {  # This quizzess table is master table for the quiz_questions table
+        "id": int,
+        "quiz_name": str,
+        "pk": "id",
+    },
+    "quiz_questions": {  # This table is for the mapping of quiz and questions
+        "id": int,
+        "quiz_id": int,  # Foreign key linking to quizzes
+        "question_id": int,  # Foreign key linking to questions
+        "pk": "id",
+    },
+}
 
-app, route, quizzes, Quiz = fast_app(
+
+app, route, questions_table, quizzes_table, quiz_questions_table = fast_app(
     "data/quiz.db",
     live=True,
-    id=int,
-    question=str,
-    a=str,
-    b=str,
-    c=str,
-    d=str,
-    answers=str,
-    tag=str,
-    pk="id",
+    tbls=tables_schema,
     hdrs=[custom_css],
 )
+
+# Unpacking the table_object and dataclass
+questions, Questions = questions_table
+quizzes, Quizzes = quizzes_table
+quiz_questions, QuizQuestions = quiz_questions_table
 
 column_names = ["Select", "Question", "A", "B", "C", "D", "Answer", "Tag"]
 
@@ -119,7 +141,7 @@ async def post(file: UploadFile):
         orient="records"  # This will give each row as a dict value with column name as key
     )
     # For testing purposes we are deleting all the data from db before inserting new data
-    quizzes.insert_all(data, truncate=True)
+    questions.insert_all(data, truncate=True)
     return (
         P("Successfully added"),
         # It will redirect to '/questions' after 1 sec
@@ -131,7 +153,7 @@ async def post(file: UploadFile):
 def get():
     table = Table(
         Thead(Tr(map(Th, column_names)), cls="freeze-header"),
-        Tbody(map(render_row, quizzes())),
+        Tbody(map(render_row, questions())),
         cls="striped",
     )
     export_button = A(Button("Export"), href="/download")
@@ -140,24 +162,30 @@ def get():
     return Container(table), buttons
 
 
-def render_question(quizzes):
-    return Li(quizzes["question"])
+def render_question(questions):
+    return Li(questions["question"])
 
 
 @route("/preview_questions")
 def get():
-    quiz_name_input = Input(Placeholder="Enter Quiz Name", required=True)
-    form = Form(Group(quiz_name_input, Button("Submit")))
+    quiz_name_input = Input(
+        placeholder="Enter Quiz Name", id="quiz_name", required=True
+    )
+    form = Form(
+        Group(quiz_name_input, Button("Submit")),
+        method="POST",
+        action="/create_quiz",
+    )
     if not selected_questions_id:
         # vars is used to convert object to dict
         # because the else block returns list of dicts hence we standardized
-        selected_quiz_questions = map(vars, quizzes())
+        selected_quiz_questions = map(vars, questions())
     else:
         # Created a query to get all the selected questions like, 'id IN (1, 2)'
         query = "id IN ({}) ".format(", ".join(map(str, selected_questions_id)))
-        selected_quiz_questions = quizzes.rows_where(where=query)
+        selected_quiz_questions = questions.rows_where(where=query)
     preview_questions = Div(
-        H3("Selected Questions"),
+        H4("Selected Questions"),
         Ol(
             map(
                 render_question,
@@ -167,7 +195,23 @@ def get():
     )
     back_to_select = A(Button("Back to select"), href="/questions")
     card = Card(preview_questions, header=form, footer=back_to_select)
-    return Container(card)
+    return Titled("Create Quiz", card)
+
+
+@route("/create_quiz")
+def post(quiz_name: Quizzes):  # type:ignore
+    global selected_questions_id
+    quiz_data = quizzes.insert(quiz_name)
+    for question_id in selected_questions_id:
+        quiz_questions.insert(quiz_id=quiz_data.id, question_id=question_id)
+
+    # Clear the selected questions after creating the quiz
+    selected_questions_id = []
+    return (
+        P("Successfully Created Quiz"),
+        # It will redirect to '/questions' after 1 sec
+        Meta(http_equiv="refresh", content="1; url=/"),
+    )
 
 
 @route("/select_question")
@@ -182,7 +226,7 @@ def post(question_id: int):
 
 @route("/download")
 def get():
-    df = pd.DataFrame(quizzes()).drop("id", axis=1).rename(columns=str.capitalize)
+    df = pd.DataFrame(questions()).drop("id", axis=1).rename(columns=str.capitalize)
     # Create a temporary directory to store the Excel file becasue xlwings doesn't support direct streaming
     temp_dir = tempfile.mkdtemp()
     temp_file_path = os.path.join(temp_dir, "quiz_data.xlsx")
