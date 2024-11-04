@@ -91,6 +91,8 @@ def get():
         A("Upload Excel", href="/upload"),
         " | ",
         A("All Questions", href="/questions"),
+        " | ",
+        A("All Quizzes", href="/all_quizzes"),
     )
 
 
@@ -166,6 +168,27 @@ def render_question(questions):
     return Li(questions["question"])
 
 
+def get_preview_questions(questions_id: list):
+    if not questions_id:
+        # vars is used to convert object to dict
+        # because the else block returns list of dicts hence we standardized
+        selected_quiz_questions = map(vars, questions())
+    else:
+        # Created a query to get all the selected questions like, 'id IN (1, 2)'
+        query = "id IN ({}) ".format(", ".join(map(str, questions_id)))
+        selected_quiz_questions = list(questions.rows_where(where=query))
+    preview_questions = Div(
+        H4("Questions"),
+        Ol(
+            map(
+                render_question,
+                selected_quiz_questions,
+            )
+        ),
+    )
+    return preview_questions
+
+
 @route("/preview_questions")
 def get():
     quiz_name_input = Input(
@@ -176,26 +199,29 @@ def get():
         method="POST",
         action="/create_quiz",
     )
-    if not selected_questions_id:
-        # vars is used to convert object to dict
-        # because the else block returns list of dicts hence we standardized
-        selected_quiz_questions = map(vars, questions())
-    else:
-        # Created a query to get all the selected questions like, 'id IN (1, 2)'
-        query = "id IN ({}) ".format(", ".join(map(str, selected_questions_id)))
-        selected_quiz_questions = questions.rows_where(where=query)
-    preview_questions = Div(
-        H4("Selected Questions"),
-        Ol(
-            map(
-                render_question,
-                selected_quiz_questions,
-            )
-        ),
-    )
     back_to_select = A(Button("Back to select"), href="/questions")
-    card = Card(preview_questions, header=form, footer=back_to_select)
+    card = Card(
+        get_preview_questions(selected_questions_id), header=form, footer=back_to_select
+    )
     return Titled("Create Quiz", card)
+
+
+def get_quiz_questions_id(quiz_id: int):
+    query = f"quiz_id = {quiz_id}"
+    return [row["question_id"] for row in quiz_questions.rows_where(where=query)]
+
+
+@route("/preview_quiz/{quiz_id}")
+def get(quiz_id: int):
+    quiz_name = quizzes.get(quiz_id).quiz_name
+    quiz_questions_id = get_quiz_questions_id(quiz_id)
+    preview_questions = get_preview_questions(quiz_questions_id)
+    back_button = A(Button("Back"), href="/all_quizzes")
+    card = Card(
+        preview_questions,
+        footer=back_button,
+    )
+    return Title("Quiz Preview"), Container("Quiz Name", H1(quiz_name), card)
 
 
 @route("/create_quiz")
@@ -210,8 +236,27 @@ def post(quiz_name: Quizzes):  # type:ignore
     return (
         P("Successfully Created Quiz"),
         # It will redirect to '/questions' after 1 sec
-        Meta(http_equiv="refresh", content="1; url=/"),
+        Meta(http_equiv="refresh", content="1; url=/all_quizzes"),
     )
+
+
+def render_quiz_name(quiz):
+    question_count = len(get_quiz_questions_id(quiz.id))
+    return Tr(
+        Td(quiz.quiz_name),
+        Td(question_count),
+        Td(A("Show", href=f"/preview_quiz/{quiz.id}")),
+    )
+
+
+@route("/all_quizzes")
+def get():
+    all_quizzes = map(render_quiz_name, quizzes())
+    table = Table(
+        Thead(Tr(Th("Quiz Name"), Th("Total Quetions"), Th("Preview"))),
+        Tbody(*all_quizzes),
+    )
+    return Titled("All Quizzes", table)
 
 
 @route("/select_question")
