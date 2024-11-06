@@ -4,6 +4,7 @@ import pandas as pd
 from io import BytesIO
 import tempfile
 import xlwings as xw
+import sqlite3
 
 selected_questions_id = []
 
@@ -66,20 +67,54 @@ tables_schema = {
         "question_id": int,  # Foreign key linking to questions
         "pk": "id",
     },
+    "student": {
+        "student_id": int,
+        "username": str,
+        "pk": "student_id",
+    },
 }
 
+# Redirect response for unauthenticated users
+login_redir = RedirectResponse("/student/login", status_code=303)
 
-app, route, questions_table, quizzes_table, quiz_questions_table = fast_app(
-    "data/quiz.db",
-    live=True,
-    tbls=tables_schema,
-    hdrs=[custom_css],
+
+# Beforeware to check authentication
+def before(request, session):
+    # Get authentication from session
+    auth = request.scope["auth"] = session.get("auth", None)
+    if not auth:
+        return login_redir
+
+
+bware = Beforeware(
+    before,
+    skip=[
+        r"/favicon\.ico",
+        r"/static/.*",
+        r".*\.css",
+        r"^/(?!.*student).*$|/student/(login|auth)",  # this will exclude any path that contains "student" in the endpoint except student login and auth pages
+    ],
 )
+
+app, route, questions_table, quizzes_table, quiz_questions_table, students_table = (
+    fast_app(
+        "data/quiz.db",
+        live=True,
+        tbls=tables_schema,
+        hdrs=[custom_css],
+        before=bware,
+    )
+)
+
 
 # Unpacking the table_object and dataclass
 questions, Questions = questions_table
 quizzes, Quizzes = quizzes_table
 quiz_questions, QuizQuestions = quiz_questions_table
+students, Students = students_table
+
+# To make the username unique
+students.create_index(["username"], unique=True, if_not_exists=True)
 
 column_names = ["Select", "Question", "A", "B", "C", "D", "Answer", "Tag"]
 
@@ -93,6 +128,8 @@ def get():
         A("All Questions", href="/questions"),
         " | ",
         A("All Quizzes", href="/all_quizzes"),
+        " | ",
+        A("Student", href="/student/quiz"),
     )
 
 
@@ -299,6 +336,54 @@ def get():
         "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",  # This is to tell the browser that this is an excel file
     }
     return StreamingResponse(output, headers=headers)
+
+
+## Student Pages ##
+
+
+@route("/student/login")
+def get():
+    group = Group(
+        Input(id="username", placeholder="Enter Username", required=True),
+        Button("Login"),
+    )
+    form = Form(
+        group,
+        action="/student/auth",
+        method="post",
+    )
+    return Titled("Student Login", form)
+
+
+@route("/student/auth")
+def post(student: Students, session):  # type: ignore
+    username = student.username
+    try:
+        students.insert(student)
+    except sqlite3.IntegrityError:
+        # If the username already exists, do nothing
+        pass
+    except Exception as e:
+        return P(e)
+    session["auth"] = username
+    return RedirectResponse("/student/quiz", status_code=303)
+
+
+@route("/student/quiz")
+def get(auth):
+    return Title(f"Student page"), Container(
+        Grid(
+            H1(f"Welcome {auth}"),
+            Div(A("logout", href="/student/logout"), style="text-align: right"),
+        )
+    )
+
+
+@route("/student/logout")
+def get(sess):
+    if "auth" in sess:
+        del sess["auth"]
+    return login_redir
 
 
 serve()
