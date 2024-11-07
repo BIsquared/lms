@@ -277,22 +277,35 @@ def post(quiz_name: Quizzes):  # type:ignore
     )
 
 
-def render_quiz_name(quiz):
+def render_quiz_name(quiz, view_as: str):
     question_count = len(get_quiz_questions_id(quiz.id))
+    show_preview = A("Show", href=f"/preview_quiz/{quiz.id}")
+    start_quiz = A("Take", href=f"/student/start_quiz/{quiz.id}")
     return Tr(
         Td(quiz.quiz_name),
         Td(question_count),
-        Td(A("Show", href=f"/preview_quiz/{quiz.id}")),
+        Td(show_preview if view_as == "teacher" else start_quiz),
     )
+
+
+def display_all_quizzes(view_as: str):
+    all_quizzes = map(lambda quiz: render_quiz_name(quiz, view_as), quizzes())
+    table = Table(
+        Thead(
+            Tr(
+                Th("Quiz Name"),
+                Th("Total Quetions"),
+                Th("Preview" if view_as == "teacher" else "Action"),
+            )
+        ),
+        Tbody(*all_quizzes),
+    )
+    return table
 
 
 @route("/all_quizzes")
 def get():
-    all_quizzes = map(render_quiz_name, quizzes())
-    table = Table(
-        Thead(Tr(Th("Quiz Name"), Th("Total Quetions"), Th("Preview"))),
-        Tbody(*all_quizzes),
-    )
+    table = display_all_quizzes(view_as="teacher")
     return Titled("All Quizzes", table)
 
 
@@ -371,12 +384,18 @@ def post(student: Students, session):  # type: ignore
 
 @route("/student/quiz")
 def get(auth):
-    return Title(f"Student page"), Container(
-        Grid(
-            H1(f"Welcome {auth}"),
-            Div(A("logout", href="/student/logout"), style="text-align: right"),
-        )
+    header = Grid(
+        H1(f"Welcome {auth}"),
+        Div(A("logout", href="/student/logout"), style="text-align: right"),
     )
+    table = display_all_quizzes(view_as="student")
+    return Title(f"Student page"), Container(header, table)
+
+
+@route("/student/start_quiz/{quiz_id}")
+def get(quiz_id: int):
+    quiz_name = quizzes.get(quiz_id).quiz_name
+    return Titled(f"Quiz: {quiz_name}")
 
 
 @route("/student/logout")
