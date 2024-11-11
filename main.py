@@ -205,7 +205,7 @@ def render_question(questions):
     return Li(questions["question"])
 
 
-def get_preview_questions(questions_id: list):
+def get_questions_by_question_ids(questions_id: list):
     if not questions_id:
         # vars is used to convert object to dict
         # because the else block returns list of dicts hence we standardized
@@ -214,6 +214,11 @@ def get_preview_questions(questions_id: list):
         # Created a query to get all the selected questions like, 'id IN (1, 2)'
         query = "id IN ({}) ".format(", ".join(map(str, questions_id)))
         selected_quiz_questions = list(questions.rows_where(where=query))
+    return selected_quiz_questions
+
+
+def get_preview_questions(questions_id: list):
+    selected_quiz_questions = get_questions_by_question_ids(questions_id)
     preview_questions = Div(
         H4("Questions"),
         Ol(
@@ -243,7 +248,7 @@ def get():
     return Titled("Create Quiz", card)
 
 
-def get_quiz_questions_id(quiz_id: int):
+def get_question_ids_by_quiz_id(quiz_id: int):
     query = f"quiz_id = {quiz_id}"
     return [row["question_id"] for row in quiz_questions.rows_where(where=query)]
 
@@ -251,7 +256,7 @@ def get_quiz_questions_id(quiz_id: int):
 @route("/preview_quiz/{quiz_id}")
 def get(quiz_id: int):
     quiz_name = quizzes.get(quiz_id).quiz_name
-    quiz_questions_id = get_quiz_questions_id(quiz_id)
+    quiz_questions_id = get_question_ids_by_quiz_id(quiz_id)
     preview_questions = get_preview_questions(quiz_questions_id)
     back_button = A(Button("Back"), href="/all_quizzes")
     card = Card(
@@ -278,9 +283,9 @@ def post(quiz_name: Quizzes):  # type:ignore
 
 
 def render_quiz_name(quiz, view_as: str):
-    question_count = len(get_quiz_questions_id(quiz.id))
+    question_count = len(get_question_ids_by_quiz_id(quiz.id))
     show_preview = A("Show", href=f"/preview_quiz/{quiz.id}")
-    start_quiz = A("Take", href=f"/student/start_quiz/{quiz.id}")
+    start_quiz = A("Take", href=f"/student/take_quiz/{quiz.id}/question/1")
     return Tr(
         Td(quiz.quiz_name),
         Td(question_count),
@@ -392,10 +397,70 @@ def get(auth):
     return Title(f"Student page"), Container(header, table)
 
 
-@route("/student/start_quiz/{quiz_id}")
+def generate_navigation_button(button_name: str, url: str, cls_name=None):
+    return Button(
+        button_name,
+        hx_get=url,
+        hx_replace_url="true",
+        target_id="quiz_container",
+        hx_swap="outerHTML",
+        cls=cls_name,
+    )
+
+
+def render_quiz_question(quiz_id: int, question_no: int):
+    current_quiz_question_ids = get_question_ids_by_quiz_id(quiz_id)
+    quiz_questions = get_questions_by_question_ids(current_quiz_question_ids)
+    quiz = quiz_questions[question_no - 1]
+    header = H5(f"{question_no}) {quiz["question"]}")
+
+    options = [
+        Label(Input(type="radio", name="option", value=i), Span(quiz[i]))
+        for i in ["a", "b", "c", "d"]
+        if quiz[i]
+    ]
+
+    previous_button = generate_navigation_button(
+        "Previous", url=f"/student/quiz/previous/{quiz_id}/question/{question_no}"
+    )
+    next_button = generate_navigation_button(
+        "Next", url=f"/student/quiz/next/{quiz_id}/question/{question_no}"
+    )
+    submit_button = generate_navigation_button(
+        "Submit", url=f"/student/quiz/submit/{quiz_id}", cls_name="contrast"
+    )
+
+    footer = Grid(
+        previous_button if question_no > 1 else None,
+        Div(
+            submit_button if question_no == len(quiz_questions) else next_button,
+            style="text-align: right",
+        ),
+    )
+    return Card(*options, header=header, footer=footer)
+
+
+@route("/student/quiz/next/{quiz_id}/question/{question_no}")
+def get(quiz_id: int, question_no: int):
+    return RedirectResponse(f"/student/take_quiz/{quiz_id}/question/{question_no + 1}")
+
+
+@route("/student/quiz/previous/{quiz_id}/question/{question_no}")
+def get(quiz_id: int, question_no: int):
+    return RedirectResponse(f"/student/take_quiz/{quiz_id}/question/{question_no - 1}")
+
+
+@route("/student/quiz/submit/{quiz_id}")
 def get(quiz_id: int):
-    quiz_name = quizzes.get(quiz_id).quiz_name
-    return Titled(f"Quiz: {quiz_name}")
+    return Titled("Quiz Submitted")
+
+
+@route("/student/take_quiz/{quiz_id}/question/{question_no}")
+def get(quiz_id: int, question_no: int):
+    current_quiz = quizzes.get(quiz_id)
+    quiz_name = current_quiz.quiz_name
+    current_question = render_quiz_question(quiz_id, question_no)
+    return Container(H3(f"Quiz: {quiz_name}"), current_question, id="quiz_container")
 
 
 @route("/student/logout")
