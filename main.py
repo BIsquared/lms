@@ -72,6 +72,14 @@ tables_schema = {
         "username": str,
         "pk": "student_id",
     },
+    "students_score": {
+        "id": int,
+        "student_id": int,
+        "quiz_id": int,
+        "question_id": int,
+        "selected_option": str,
+        "pk": "id",
+    },
 }
 
 # Redirect response for unauthenticated users
@@ -96,14 +104,20 @@ bware = Beforeware(
     ],
 )
 
-app, route, questions_table, quizzes_table, quiz_questions_table, students_table = (
-    fast_app(
-        "data/quiz.db",
-        live=True,
-        tbls=tables_schema,
-        hdrs=[custom_css],
-        before=bware,
-    )
+(
+    app,
+    route,
+    questions_table,
+    quizzes_table,
+    quiz_questions_table,
+    students_table,
+    students_score_table,
+) = fast_app(
+    "data/quiz.db",
+    live=True,
+    tbls=tables_schema,
+    hdrs=[custom_css],
+    before=bware,
 )
 
 
@@ -112,6 +126,7 @@ questions, Questions = questions_table
 quizzes, Quizzes = quizzes_table
 quiz_questions, QuizQuestions = quiz_questions_table
 students, Students = students_table
+students_score, StudentsScore = students_score_table
 
 # To make the username unique
 students.create_index(["username"], unique=True, if_not_exists=True)
@@ -285,7 +300,7 @@ def post(quiz_name: Quizzes):  # type:ignore
 def render_quiz_name(quiz, view_as: str):
     question_count = len(get_question_ids_by_quiz_id(quiz.id))
     show_preview = A("Show", href=f"/preview_quiz/{quiz.id}")
-    start_quiz = A("Take", href=f"/student/take_quiz/{quiz.id}/question/1")
+    start_quiz = A("Take", href=f"/student/take_quiz/{quiz.id}")
     return Tr(
         Td(quiz.quiz_name),
         Td(question_count),
@@ -408,17 +423,78 @@ def generate_navigation_button(button_name: str, url: str, cls_name=None):
     )
 
 
-def render_quiz_question(quiz_id: int, question_no: int):
+def get_student_id_by_name(student_name: str):
+    query = "username = ?"
+    student = list(students.rows_where(query, [student_name]))
+    return student[0]["student_id"]
+
+
+def get_student_score_rows(
+    student_id: int,
+    quiz_id: int,
+    question_id=None,
+):
+    query = "student_id = ? AND quiz_id = ?"
+    values = [student_id, quiz_id]
+    if question_id != None:
+        query += " AND question_id = ?"
+        values.append(question_id)
+    data = list(
+        students_score.rows_where(query, values, limit=1)
+    )  # Limit is 1 to check the student has already attended quiz or update one question at a time
+    return data
+
+
+def preloading_student_score(quiz_id: int, student_name: str):
+    student_id = get_student_id_by_name(student_name)
+    # Check if the student has already started or submitted the quiz
+    if get_student_score_rows(student_id, quiz_id):
+        return None
+    # Prepopulate the student_score table for storing the selected answers
+    questions_id = get_question_ids_by_quiz_id(quiz_id)
+    for question_id in questions_id:
+        data = StudentsScore(
+            student_id=student_id,
+            quiz_id=quiz_id,
+            question_id=question_id,
+        )
+        students_score.insert(data)
+
+
+def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
     current_quiz_question_ids = get_question_ids_by_quiz_id(quiz_id)
     quiz_questions = get_questions_by_question_ids(current_quiz_question_ids)
-    quiz = quiz_questions[question_no - 1]
-    header = H5(f"{question_no}) {quiz["question"]}")
-
+    # First question is at index 0 and question_no starts from 1
+    question = quiz_questions[question_no - 1]
+    header = H5(f"{question_no}) {question["question"]}")
+    score = get_student_score_rows(
+        get_student_id_by_name(student_name),
+        quiz_id,
+        question_id=question["id"],
+    )
+    score = score[0]
+    # Create a radio button for the available options only
+    # And preselect the option that the student has already selected for it to retain the selected option when navigating to the next question.
     options = [
-        Label(Input(type="radio", name="option", value=i), Span(quiz[i]))
-        for i in ["a", "b", "c", "d"]
-        if quiz[i]
+        Label(
+            Input(
+                type="radio",
+                name="selected_option",
+                value=option.upper(),
+                checked=(True if option.upper() == score["selected_option"] else False),
+            ),
+            Span(question[option]),
+        )
+        for option in ["a", "b", "c", "d"]
+        if question[option]
     ]
+    form = Form(
+        *options,
+        Hidden(name="score_id", value=score["id"]),
+        hx_post="/student/quiz/answer",
+        hx_swap="none",
+        hx_trigger="change",
+    )
 
     previous_button = generate_navigation_button(
         "Previous", url=f"/student/quiz/previous/{quiz_id}/question/{question_no}"
@@ -437,7 +513,20 @@ def render_quiz_question(quiz_id: int, question_no: int):
             style="text-align: right",
         ),
     )
-    return Card(*options, header=header, footer=footer)
+    return Card(form, header=header, footer=footer)
+
+
+@route("/student/take_quiz/{quiz_id}")
+def get(quiz_id: int, auth):
+    preloading_student_score(quiz_id, student_name=auth)
+    return RedirectResponse(f"/student/take_quiz/{quiz_id}/question/1", status_code=303)
+
+
+@route("/student/quiz/answer")
+def post(score_id: int, selected_option: str):  # type:ignore
+    score = students_score.get(score_id)
+    score.selected_option = selected_option
+    students_score.update(score)
 
 
 @route("/student/quiz/next/{quiz_id}/question/{question_no}")
@@ -456,10 +545,10 @@ def get(quiz_id: int):
 
 
 @route("/student/take_quiz/{quiz_id}/question/{question_no}")
-def get(quiz_id: int, question_no: int):
+def get(quiz_id: int, question_no: int, auth):
     current_quiz = quizzes.get(quiz_id)
     quiz_name = current_quiz.quiz_name
-    current_question = render_quiz_question(quiz_id, question_no)
+    current_question = render_quiz_question(quiz_id, question_no, student_name=auth)
     return Container(H3(f"Quiz: {quiz_name}"), current_question, id="quiz_container")
 
 
