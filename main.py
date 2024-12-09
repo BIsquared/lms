@@ -488,7 +488,10 @@ def preloading_student_score(quiz_id: int, student_name: str):
         student_quiz_response.insert(data)
 
 
-# FIXME: This is retirving all the questions, instead of only the selected questions
+def get_anwser_by_question_id(question_id: int):
+    return questions.get(question_id).answers
+
+
 def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
     current_quiz_question_ids = get_question_ids_by_quiz_id(quiz_id)
     quiz_questions = get_questions_by_question_ids(current_quiz_question_ids)
@@ -499,15 +502,17 @@ def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
     student_quiz_id = get_student_quiz_id(student_id, quiz_id)[0]["id"]
     score = get_student_score_rows(student_quiz_id, question["id"])
     score = score[0]
+    answers = get_anwser_by_question_id(question["id"])
+    print(score)
     # Create a radio button for the available options only
     # And preselect the option that the student has already selected for it to retain the selected option when navigating to the next question.
     options = [
         Label(
             Input(
-                type="radio",
+                type="checkbox" if len(answers) > 1 else "radio",
                 name="selected_option",
                 value=option.upper(),
-                checked=(True if option.upper() == score["selected_option"] else False),
+                checked=(True if option.upper() in score["selected_option"] else False),
             ),
             Span(question[option]),
         )
@@ -519,7 +524,7 @@ def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
         Hidden(name="score_id", value=score["id"]),
         hx_post="/student/quiz/answer",
         hx_swap="none",
-        hx_trigger="change",
+        hx_trigger="change",  # It will trigger the for every action in the checkbox or radio button
     )
 
     previous_button = generate_navigation_button(
@@ -551,7 +556,11 @@ def get(quiz_id: int, auth):
 
 
 @route("/student/quiz/answer")
-def post(score_id: int, selected_option: str):  # type:ignore
+async def post(score_id: int, req):  # type:ignore
+    form_data = await req.form()
+    del_values = form_data.getlist("selected_option")
+    selected_option = "".join(del_values)
+
     score = student_quiz_response.get(score_id)
     score.selected_option = selected_option
     student_quiz_response.update(score)
@@ -572,8 +581,8 @@ def post(student_quiz_id: int):
     # Calculate the total score
     total_score = 0
     quiz_questions_with_answers = evaluate_answers(student_quiz_id)
-    for question in quiz_questions_with_answers:
-        if question["selected_option"] in question["answers"]:
+    for answer in quiz_questions_with_answers:
+        if answer["selected_option"] in answer["answers"]:
             total_score += 1
     total_score = f"{total_score}/{len(quiz_questions_with_answers)}"
     # Update the student_quiz_result table
