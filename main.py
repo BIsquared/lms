@@ -72,10 +72,17 @@ tables_schema = {
         "username": str,
         "pk": "student_id",
     },
-    "students_score": {
+    "student_quiz_result": {
         "id": int,
         "student_id": int,
         "quiz_id": int,
+        "completed": bool,
+        "score": str,
+        "pk": "id",
+    },
+    "student_quiz_response": {
+        "id": int,
+        "student_quiz_id": int,  # Foreign key linking to student_quiz_result Table
         "question_id": int,
         "selected_option": str,
         "pk": "id",
@@ -111,7 +118,8 @@ bware = Beforeware(
     quizzes_table,
     quiz_questions_table,
     students_table,
-    students_score_table,
+    student_quiz_result_table,
+    student_quiz_response_table,
 ) = fast_app(
     "data/quiz.db",
     live=True,
@@ -126,7 +134,8 @@ questions, Questions = questions_table
 quizzes, Quizzes = quizzes_table
 quiz_questions, QuizQuestions = quiz_questions_table
 students, Students = students_table
-students_score, StudentsScore = students_score_table
+student_quiz_result, StudentQuizResult = student_quiz_result_table
+student_quiz_response, StudentQuizResponse = student_quiz_response_table
 
 # To make the username unique
 students.create_index(["username"], unique=True, if_not_exists=True)
@@ -168,12 +177,14 @@ def get():
     return Title("LMS"), Container(form, Div(id="main"))
 
 
+# Util function
 def standardize_column(column_name):
     cleaned_column = column_name.strip().lower()
     # Replace consecutive spaces with a single underscore
     return re.sub(r"\s+", "_", cleaned_column)
 
 
+# Util function
 def convert_binary_to_df(file_content):
     # Create a BytesIO object to read it as excel
     excel_data = BytesIO(file_content)
@@ -220,6 +231,7 @@ def render_question(questions):
     return Li(questions["question"])
 
 
+# Util function
 def get_questions_by_question_ids(questions_id: list):
     if not questions_id:
         # vars is used to convert object to dict
@@ -263,6 +275,7 @@ def get():
     return Titled("Create Quiz", card)
 
 
+# Util function
 def get_question_ids_by_quiz_id(quiz_id: int):
     query = f"quiz_id = {quiz_id}"
     return [row["question_id"] for row in quiz_questions.rows_where(where=query)]
@@ -326,7 +339,9 @@ def display_all_quizzes(view_as: str):
 @route("/all_quizzes")
 def get():
     table = display_all_quizzes(view_as="teacher")
-    return Titled("All Quizzes", table)
+    home_button = A(Button("Home"), href="/")
+    container = Container(table, home_button)
+    return Titled("All Quizzes", container)
 
 
 @route("/select_question")
@@ -413,9 +428,10 @@ def get(auth):
 
 
 def generate_navigation_button(button_name: str, url: str, cls_name=None):
+    method = {"hx_post": url} if button_name == "Submit" else {"hx_get": url}
     return Button(
         button_name,
-        hx_get=url,
+        **method,
         hx_replace_url="true",
         target_id="quiz_container",
         hx_swap="outerHTML",
@@ -423,55 +439,65 @@ def generate_navigation_button(button_name: str, url: str, cls_name=None):
     )
 
 
+# Util function
 def get_student_id_by_name(student_name: str):
     query = "username = ?"
     student = list(students.rows_where(query, [student_name]))
     return student[0]["student_id"]
 
 
-def get_student_score_rows(
-    student_id: int,
-    quiz_id: int,
-    question_id=None,
-):
-    query = "student_id = ? AND quiz_id = ?"
-    values = [student_id, quiz_id]
-    if question_id != None:
-        query += " AND question_id = ?"
-        values.append(question_id)
+# Util function
+def get_student_quiz_id(student_id: int, quiz_id: int):
     data = list(
-        students_score.rows_where(query, values, limit=1)
-    )  # Limit is 1 to check the student has already attended quiz or update one question at a time
+        student_quiz_result.rows_where(
+            "student_id = ? AND quiz_id = ?", [student_id, quiz_id]
+        )
+    )
+    return data
+
+
+# Util function
+def get_student_score_rows(student_quiz_id: int, question_id: int):
+    data = list(
+        student_quiz_response.rows_where(
+            "student_quiz_id = ? AND question_id = ?", [student_quiz_id, question_id]
+        )
+    )
     return data
 
 
 def preloading_student_score(quiz_id: int, student_name: str):
     student_id = get_student_id_by_name(student_name)
     # Check if the student has already started or submitted the quiz
-    if get_student_score_rows(student_id, quiz_id):
+    try:
+        student_quiz_id = get_student_quiz_id(student_id, quiz_id)[0]
+    except IndexError:
+        student_quiz_id = student_quiz_result.insert(
+            StudentQuizResult(student_id=student_id, quiz_id=quiz_id, completed=False)
+        )
+    else:
         return None
     # Prepopulate the student_score table for storing the selected answers
     questions_id = get_question_ids_by_quiz_id(quiz_id)
     for question_id in questions_id:
-        data = StudentsScore(
-            student_id=student_id,
-            quiz_id=quiz_id,
+        data = StudentQuizResponse(
+            student_quiz_id=student_quiz_id.id,
             question_id=question_id,
+            selected_option="",
         )
-        students_score.insert(data)
+        student_quiz_response.insert(data)
 
 
+# FIXME: This is retirving all the questions, instead of only the selected questions
 def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
     current_quiz_question_ids = get_question_ids_by_quiz_id(quiz_id)
     quiz_questions = get_questions_by_question_ids(current_quiz_question_ids)
     # First question is at index 0 and question_no starts from 1
     question = quiz_questions[question_no - 1]
     header = H5(f"{question_no}) {question["question"]}")
-    score = get_student_score_rows(
-        get_student_id_by_name(student_name),
-        quiz_id,
-        question_id=question["id"],
-    )
+    student_id = get_student_id_by_name(student_name)
+    student_quiz_id = get_student_quiz_id(student_id, quiz_id)[0]["id"]
+    score = get_student_score_rows(student_quiz_id, question["id"])
     score = score[0]
     # Create a radio button for the available options only
     # And preselect the option that the student has already selected for it to retain the selected option when navigating to the next question.
@@ -503,7 +529,9 @@ def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
         "Next", url=f"/student/quiz/next/{quiz_id}/question/{question_no}"
     )
     submit_button = generate_navigation_button(
-        "Submit", url=f"/student/quiz/submit/{quiz_id}", cls_name="contrast"
+        "Submit",
+        url=f"/student/quiz/submit/{student_quiz_id}",
+        cls_name="contrast",
     )
 
     footer = Grid(
@@ -524,9 +552,9 @@ def get(quiz_id: int, auth):
 
 @route("/student/quiz/answer")
 def post(score_id: int, selected_option: str):  # type:ignore
-    score = students_score.get(score_id)
+    score = student_quiz_response.get(score_id)
     score.selected_option = selected_option
-    students_score.update(score)
+    student_quiz_response.update(score)
 
 
 @route("/student/quiz/next/{quiz_id}/question/{question_no}")
@@ -539,9 +567,78 @@ def get(quiz_id: int, question_no: int):
     return RedirectResponse(f"/student/take_quiz/{quiz_id}/question/{question_no - 1}")
 
 
-@route("/student/quiz/submit/{quiz_id}")
-def get(quiz_id: int):
-    return Titled("Quiz Submitted")
+@route("/student/quiz/submit/{student_quiz_id}")
+def post(student_quiz_id: int):
+    # Calculate the total score
+    total_score = 0
+    quiz_questions_with_answers = evaluate_answers(student_quiz_id)
+    for question in quiz_questions_with_answers:
+        if question["selected_option"] in question["answers"]:
+            total_score += 1
+    total_score = f"{total_score}/{len(quiz_questions_with_answers)}"
+    # Update the student_quiz_result table
+    student_quiz = student_quiz_result.get(student_quiz_id)
+    student_quiz.score = total_score
+    student_quiz.completed = True
+    student_quiz_result.update(student_quiz)
+    return RedirectResponse(f"/student/quiz/{student_quiz_id}/result", status_code=303)
+
+
+@route("/student/quiz/{student_quiz_id}/result")
+def get(student_quiz_id: int):
+    student_quiz = student_quiz_result.get(student_quiz_id)
+    quiz_name = quizzes.get(student_quiz.quiz_id).quiz_name
+    header = f"Quiz: {quiz_name}"
+    quiz_questions_with_answers = evaluate_answers(student_quiz_id)
+    answers = []
+    for i, question in enumerate(quiz_questions_with_answers, start=1):
+        answers.append(render_quiz_result(question, i))
+    return Titled(header, P(f"Score: {student_quiz.score}"), *answers)
+
+
+def evaluate_answers(student_quiz_id: int):
+    selected_options = list(
+        student_quiz_response.rows_where("student_quiz_id = ?", [student_quiz_id])
+    )
+    quiz_questions_with_answers = []
+    for question in selected_options:
+        current_question = questions.get(question["question_id"]).__dict__
+        current_question["student_quiz_id"] = question["student_quiz_id"]
+        current_question["selected_option"] = question["selected_option"]
+        quiz_questions_with_answers.append(current_question)
+    return quiz_questions_with_answers
+
+
+def render_quiz_result(question: dict, question_no: int):
+    header = H5(f"{question_no}) {question['question']}")
+    question_option = []
+    for option in ["a", "b", "c", "d"]:
+        if question[option]:
+            is_invalid = "None"
+            is_checked = None
+            selected_option = question["selected_option"].lower()
+            correct_answer = question["answers"].lower()
+            if option in correct_answer:
+                # set the correct answer as a green checkmark
+                is_invalid = "false"
+            if option in selected_option:
+                is_checked = True
+            if option in selected_option and not option in correct_answer:
+                is_invalid = "true"
+
+            question_option.append(
+                Label(
+                    Input(
+                        type="checkbox",
+                        aria_invalid=is_invalid,
+                        checked=is_checked,
+                        onClick="return false;",  # disable the checkbox without degrading the color
+                    ),
+                    question[option],
+                )
+            )
+    card = Card(*question_option, header=header)
+    return card
 
 
 @route("/student/take_quiz/{quiz_id}/question/{question_no}")
