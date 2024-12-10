@@ -310,35 +310,28 @@ def post(quiz_name: Quizzes):  # type:ignore
     )
 
 
-def render_quiz_name(quiz, view_as: str):
-    question_count = len(get_question_ids_by_quiz_id(quiz.id))
-    show_preview = A("Show", href=f"/preview_quiz/{quiz.id}")
-    start_quiz = A("Take", href=f"/student/take_quiz/{quiz.id}")
+def render_quiz_details_for_teacher(quiz_data):
+    question_count = len(get_question_ids_by_quiz_id(quiz_data.id))
     return Tr(
-        Td(quiz.quiz_name),
+        Td(quiz_data.quiz_name),
         Td(question_count),
-        Td(show_preview if view_as == "teacher" else start_quiz),
+        Td(A("Show", href=f"/preview_quiz/{quiz_data.id}")),
     )
-
-
-def display_all_quizzes(view_as: str):
-    all_quizzes = map(lambda quiz: render_quiz_name(quiz, view_as), quizzes())
-    table = Table(
-        Thead(
-            Tr(
-                Th("Quiz Name"),
-                Th("Total Quetions"),
-                Th("Preview" if view_as == "teacher" else "Action"),
-            )
-        ),
-        Tbody(*all_quizzes),
-    )
-    return table
 
 
 @route("/all_quizzes")
 def get():
-    table = display_all_quizzes(view_as="teacher")
+    all_quizzes = map(render_quiz_details_for_teacher, quizzes())
+    table = Table(
+        Thead(
+            Tr(
+                Th("Quiz Name"),
+                Th("Total Questions"),
+                Th("Preview"),
+            )
+        ),
+        Tbody(*all_quizzes),
+    )
     home_button = A(Button("Home"), href="/")
     container = Container(table, home_button)
     return Titled("All Quizzes", container)
@@ -417,13 +410,55 @@ def post(student: Students, session):  # type: ignore
     return RedirectResponse("/student/quiz", status_code=303)
 
 
+def render_quiz_details_for_student(quiz_data, student_id):
+    quiz = quizzes.get(quiz_data.id)
+    question_count = len(get_question_ids_by_quiz_id(quiz_data.id))
+
+    try:
+        student_quiz_details = get_student_quiz_id(student_id, quiz_data.id)[0]
+    except IndexError:
+        is_completed = False
+    else:
+        is_completed = student_quiz_details["completed"]
+
+    if is_completed:
+        action_button = A(
+            "Result", href=f"/student/quiz/{student_quiz_details["id"]}/result"
+        )
+        score = student_quiz_details["score"]
+    else:
+        action_button = A("Take", href=f"/student/take_quiz/{quiz_data.id}")
+        score = "-"
+
+    return Tr(
+        Td(quiz.quiz_name),
+        Td(question_count),
+        Td(score),
+        Td(action_button),
+    )
+
+
 @route("/student/quiz")
 def get(auth):
     header = Grid(
         H1(f"Welcome {auth}"),
         Div(A("logout", href="/student/logout"), style="text-align: right"),
     )
-    table = display_all_quizzes(view_as="student")
+    student_id = get_student_id_by_name(auth)
+    all_quizzes = map(
+        lambda quiz: render_quiz_details_for_student(quiz, student_id), quizzes()
+    )
+    table = Table(
+        Thead(
+            Tr(
+                Th("Quiz Name"),
+                Th("Total Questions"),
+                Th("Score"),
+                Th("Action"),
+            )
+        ),
+        Tbody(all_quizzes),
+    )
     return Title(f"Student page"), Container(header, table)
 
 
@@ -581,13 +616,20 @@ def post(student_quiz_id: int):
     # Calculate the total score
     total_score = 0
     quiz_questions_with_answers = evaluate_answers(student_quiz_id)
-    for answer in quiz_questions_with_answers:
-        if answer["selected_option"] in answer["answers"]:
-            total_score += 1
-    total_score = f"{total_score}/{len(quiz_questions_with_answers)}"
+    for question in quiz_questions_with_answers:
+        answer_length = len(question["answers"])
+        for option in question["selected_option"]:
+            if option in question["answers"]:
+                score = 1 / answer_length
+                total_score += score
+    total_score = (
+        int(total_score) if total_score.is_integer() else round(total_score, 1)
+    )
+
+    total_score_string = f"{total_score}/{len(quiz_questions_with_answers)}"
     # Update the student_quiz_result table
     student_quiz = student_quiz_result.get(student_quiz_id)
-    student_quiz.score = total_score
+    student_quiz.score = total_score_string
     student_quiz.completed = True
     student_quiz_result.update(student_quiz)
     return RedirectResponse(f"/student/quiz/{student_quiz_id}/result", status_code=303)
@@ -598,11 +640,12 @@ def get(student_quiz_id: int):
     student_quiz = student_quiz_result.get(student_quiz_id)
     quiz_name = quizzes.get(student_quiz.quiz_id).quiz_name
     header = f"Quiz: {quiz_name}"
+    back_button = A(Button("Home"), href="/student/quiz")
     quiz_questions_with_answers = evaluate_answers(student_quiz_id)
     answers = []
     for i, question in enumerate(quiz_questions_with_answers, start=1):
         answers.append(render_quiz_result(question, i))
-    return Titled(header, P(f"Score: {student_quiz.score}"), *answers)
+    return Titled(header, P(f"Score: {student_quiz.score}"), *answers, back_button)
 
 
 def evaluate_answers(student_quiz_id: int):
