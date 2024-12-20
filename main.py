@@ -291,7 +291,7 @@ def get(quiz_id: int):
         preview_questions,
         footer=back_button,
     )
-    return Title("Quiz Preview"), Container("Quiz Name", H1(quiz_name), card)
+    return Title("Quiz Preview"), Container("Quiz Name", H3(quiz_name), card)
 
 
 @route("/create_quiz")
@@ -316,7 +316,88 @@ def render_quiz_details_for_teacher(quiz_data):
         Td(quiz_data.quiz_name),
         Td(question_count),
         Td(A("Show", href=f"/preview_quiz/{quiz_data.id}")),
+        Td(A("Result", href=f"/quiz_result/{quiz_data.id}")),
     )
+
+
+def render_evaluated_answer(data):
+    correct_answer = questions.get(data["question_id"]).answers
+    student_answer = data["selected_option"]
+    answers = [correct_option in student_answer for correct_option in correct_answer]
+    if student_answer == "":
+        return ""
+    elif all(answers):
+        return "🟢"
+    elif any(answers):
+        return "🟡"
+    else:
+        return "🔴"
+
+
+def render_quiz_result_table(quiz_id):
+    question_ids = get_question_ids_by_quiz_id(quiz_id)
+    filtered_questions = get_questions_by_question_ids(question_ids)
+    table_data = {}
+    table_data["Questions"] = [question["question"] for question in filtered_questions]
+    table_data["Answers"] = [question["answers"] for question in filtered_questions]
+    # display score data row at the end
+    table_data["Questions"].append("Total Score")
+    table_data["Answers"].append("")
+
+    # Getting only the studetns who have completed the quiz
+    quiz_details = list(
+        student_quiz_result.rows_where(where=f"quiz_id = {quiz_id} AND completed = 1")
+    )
+
+    # Merging the student reponse for the questions
+    student_quiz_result_df = pd.DataFrame(
+        quiz_details, columns=["id", "student_id", "quiz_id", "completed", "score"]
+    )
+    student_quiz_response_df = pd.DataFrame(
+        student_quiz_response(),
+        columns=["id", "student_quiz_id", "question_id", "selected_option"],
+    )
+    merged_df = student_quiz_result_df.merge(
+        student_quiz_response_df, how="left", left_on="id", right_on="student_quiz_id"
+    )
+
+    for student_id in merged_df["student_id"].unique():
+        student_name = students.get(int(student_id)).username
+        student_responses = merged_df[merged_df["student_id"] == student_id]
+        student_result = [
+            render_evaluated_answer(row) for _, row in student_responses.iterrows()
+        ]
+        student_result.append(student_responses["score"].values[0])
+        table_data[student_name] = student_result
+
+    # Prepare table rows
+    table_rows = list(zip(*table_data.values()))
+
+    # The last row is the total score
+    total_score = table_rows.pop()
+    rows = [Tr(*map(Td, row)) for row in table_rows]
+
+    # Create and return the table
+    return Table(
+        Thead(Tr(map(Th, table_data.keys()))),
+        Tbody(*rows),
+        Tfoot(Tr(*map(Th, total_score))),
+    )
+
+
+@route("/quiz_result/{quiz_id}")
+def get(quiz_id: int):
+    quiz_id = quiz_id
+    score_tb = render_quiz_result_table(quiz_id)
+    quiz_name = quizzes.get(quiz_id).quiz_name
+    header = Grid(
+        H3(quiz_name),
+        Div(
+            Strong("Correct: 🟢 | Partial correct: 🟡 | Incorrect: 🔴"),
+            style="text-align: right",
+        ),
+    )
+    return Title("Quiz Result"), Container("Quiz Result", header, score_tb)
 
 
 @route("/all_quizzes")
@@ -328,6 +409,7 @@ def get():
                 Th("Quiz Name"),
                 Th("Total Questions"),
                 Th("Preview"),
+                Th("Result"),
             )
         ),
         Tbody(*all_quizzes),
@@ -538,7 +620,7 @@ def render_quiz_question(quiz_id: int, question_no: int, student_name: str):
     score = get_student_score_rows(student_quiz_id, question["id"])
     score = score[0]
     answers = get_anwser_by_question_id(question["id"])
-    print(score)
+    # print(score)
     # Create a radio button for the available options only
     # And preselect the option that the student has already selected for it to retain the selected option when navigating to the next question.
     options = [
